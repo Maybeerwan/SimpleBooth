@@ -391,8 +391,21 @@ main() {
   fi
   
   setup_python_env
-  setup_kiosk
-  setup_systemd
+  
+  # Configuration du mode kiosk
+  if confirm "Configurer le mode Kiosk ? (o/N)"; then
+    setup_kiosk
+  else
+    log "Configuration du mode Kiosk ignorée"
+  fi
+
+  # Configuration du démarrage automatique systemd
+  if confirm "Configurer le démarage automatique ? (o/N)"; then
+    setup_systemd
+  else
+    log "Configuration du démarage automatique ignorée"
+  fi
+  
   
   echo
   show_log_summary

@@ -4,10 +4,11 @@
 
 # === CORE DEPENDENCIES ===
 # NumPy - Version stable pour ARM
-numpy==1.24.3
+numpy==1.26.4
 
 # OpenCV - Version compatible NumPy 1.24
-opencv-python==4.8.1.78
+# opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78
 
 # === WEB FRAMEWORK ===
 # Flask et dépendances

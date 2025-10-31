@@ -382,5 +382,17 @@ window.addEventListener('beforeunload', function() {
         console.log('Erreur arrêt caméra:', error);
     });
 });
+
+document.addEventListener('keydown', async function(e) {
+  // Déclenche uniquement sur la touche Espace, et pas quand l'utilisateur saisit du texte
+  if (e.code === 'Space' || e.key === ' ') {
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      return;
+    }
+    e.preventDefault();
+    capturePhoto() ;
+  }
+});
 </script>
 {% endblock %}

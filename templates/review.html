@@ -78,9 +78,10 @@
             </div>
             {% endif %}
             <div class="col">
-                <a href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
+                <!-- Remplacé pour ajouter un id et un label modifiable dynamiquement -->
+                <a id="resumeBtn" href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
                     <i class="fas fa-redo"></i>
-                    <span>Reprendre</span>
+                    <span id="resumeLabel">Reprendre</span>
                 </a>
             </div>
             <div class="col">
@@ -98,9 +99,9 @@
                     </button>
                 </div>
                 <div class="col-4">
-                    <a href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
+                    <a id="resumeBtn" href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
                         <i class="fas fa-redo"></i>
-                        <span>Reprendre</span>
+                        <span id="resumeLabel">Reprendre</span>
                     </a>
                 </div>
                 <div class="col-4">
@@ -111,9 +112,9 @@
                 </div>
             {% else %}
                 <div class="col-6">
-                    <a href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
+                    <a id="resumeBtn" href="{{ url_for('index') }}" class="btn btn-primary w-100 btn-review">
                         <i class="fas fa-redo"></i>
-                        <span>Reprendre</span>
+                        <span id="resumeLabel">Reprendre</span>
                     </a>
                 </div>
                 <div class="col-6">
@@ -375,6 +376,83 @@ function closeEffectOverlay() {
     overlay.style.display = 'none';
 }
 
+// Auto-reprendre après X secondes avec décompte visible sur le bouton
+(function() {
+    const DURATION = 5; // secondes
+    let remaining = DURATION;
+    const resumeBtn = document.getElementById('resumeBtn');
+    if (!resumeBtn) return;
 
+    // Trouver ou créer le span qui contient le texte du bouton
+    let label = document.getElementById('resumeLabel') || resumeBtn.querySelector('span');
+    if (!label) {
+        label = document.createElement('span');
+        label.id = 'resumeLabel';
+        resumeBtn.appendChild(label);
+    }
+
+    const baseLabel = (label.textContent || 'Reprendre').trim();
+
+    let intervalId = null;
+    const interactionEvents = ['touchstart', 'click', 'keydown']; // onInteraction est attaché en 'once'
+
+    const updateLabel = () => {
+        // Redécouverte du label au cas où le DOM serait ré-injecté
+        label = document.getElementById('resumeLabel') || resumeBtn.querySelector('span');
+        if (label) label.textContent = `${baseLabel} (${remaining})`;
+    };
+
+    const cancel = () => {
+        if (intervalId !== null) {
+            clearInterval(intervalId);
+            intervalId = null;
+        }
+        const lbl = document.getElementById('resumeLabel') || resumeBtn.querySelector('span');
+        if (lbl) lbl.textContent = baseLabel;
+        // Retirer le listener onInteraction (attaché avec { once: true } il est déjà retiré après déclenchement)
+        interactionEvents.forEach(ev => window.removeEventListener(ev, onInteraction));
+        // NOTE: onKeyDown (gestionnaire de la barre d'espace) n'est pas retiré ici pour rester actif
+    };
+
+    // Handler appelé par les événements d'interaction pour annuler le countdown
+    const onInteraction = () => cancel();
+
+    // Handler permanent pour la touche Espace : déclenche immédiatement "Reprendre"
+    const onKeyDown = (e) => {
+        if (e.code === 'Space' || e.key === ' ') {
+            const active = document.activeElement;
+            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+                return; // éviter d'interférer avec la saisie utilisateur
+            }
+            e.preventDefault();
+            // Annuler le timer et naviguer immédiatement
+            cancel();
+            const href = resumeBtn.getAttribute('href');
+            if (href) window.location.href = href;
+        }
+    };
+
+    // Démarrer le compte à rebours
+    updateLabel();
+    intervalId = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+            cancel();
+            const href = resumeBtn.getAttribute('href');
+            if (href) window.location.href = href;
+            return;
+        }
+        updateLabel();
+    }, 1000);
+
+    // Annuler si l'utilisateur interagit (une seule interaction suffit)
+    interactionEvents.forEach(ev => window.addEventListener(ev, onInteraction, { once: true }));
+
+    // Écouteur permanent pour la barre d'espace
+    window.addEventListener('keydown', onKeyDown);
+
+    // Si l'utilisateur clique manuellement sur le bouton, annuler le timer
+    resumeBtn.addEventListener('click', () => cancel());
+})();
 </script>
 {% endblock %}

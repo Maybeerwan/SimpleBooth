@@ -22,7 +22,7 @@ from config_utils import (
     save_config,
     ensure_directories,
 )
-from camera_utils import UsbCamera, detect_cameras
+from camera_utils import UsbCamera, detect_cameras, MockCamera
 from telegram_utils import send_to_telegram
 
 app = Flask(__name__)
@@ -724,6 +724,27 @@ def generate_video_stream():
                 else:
                     time.sleep(0.03)  # Attendre si pas de frame disponible
         
+        elif camera_type == 'mock':
+            logger.info("[CAMERA] Démarrage de la caméra Mock...")
+            mock_camera = MockCamera()
+            if not mock_camera.start():
+                raise Exception("Impossible de démarrer la caméra Mock")
+            
+            # Générateur de frames pour la caméra Mock
+            while True:
+                frame = mock_camera.get_frame()
+                if frame:
+                    # Stocker la frame pour capture instantanée
+                    with frame_lock:
+                        last_frame = frame
+                    
+                    # Envoyer la frame au navigateur
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n'
+                           b'Content-Length: ' + str(len(frame)).encode() + b'\r\n\r\n' +
+                           frame + b'\r\n')
+                else:
+                    time.sleep(0.03)  # Attendre si pas de frame disponible
         # Utiliser la Pi Camera par défaut
         else:
             logger.info("[CAMERA] Démarrage de la Pi Camera...")

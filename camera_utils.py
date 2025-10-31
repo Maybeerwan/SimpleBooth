@@ -2,6 +2,8 @@ import cv2
 import threading
 import time
 import logging
+import numpy as np
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +58,17 @@ def detect_cameras():
                             logger.info(f"[CAMERA] ✓ Caméra fonctionnelle détectée: {name}")
                             break
                         else:
+                            backend_name = {
+                                cv2.CAP_ANY: "Auto",
+                                cv2.CAP_DSHOW: "DirectShow",
+                                cv2.CAP_V4L2: "V4L2",
+                                cv2.CAP_GSTREAMER: "GStreamer",
+                            }.get(backend, "Inconnu")
                             logger.info(f"[CAMERA] Caméra {i} ouverte mais ne peut pas lire de frame avec backend {backend_name}")
-                    cap.release()
+                    if cap is not None:
+                        cap.release()
                 except Exception as e:
-                    if cap:
+                    if cap is not None:
                         cap.release()
                     logger.info(f"[CAMERA] Backend {backend} échoué pour caméra {i}: {e}")
                     continue
@@ -100,7 +109,7 @@ class UsbCamera:
                 self.camera = cv2.VideoCapture(self.camera_id, backend)
                 if not self.camera.isOpened():
                     logger.info(f"[USB CAMERA] Backend {backend_name} : impossible d'ouvrir la caméra {self.camera_id}")
-                    if self.camera:
+                    if self.camera is not None:
                         self.camera.release()
                     continue
                 resolutions_to_test = [
@@ -127,14 +136,16 @@ class UsbCamera:
                         logger.info(f"[USB CAMERA] Résolution {res_name} ({test_width}x{test_height}) non supportée")
                 if not best_resolution:
                     logger.info(f"[USB CAMERA] Backend {backend_name} : aucune résolution fonctionnelle trouvée")
-                    self.camera.release()
+                    if self.camera is not None:
+                        self.camera.release()
                     continue
                 ret, frame = self.camera.read()
                 if not ret or frame is None:
                     logger.info(
                         f"[USB CAMERA] Backend {backend_name} : la caméra {self.camera_id} ne retourne pas d'image de manière stable"
                     )
-                    self.camera.release()
+                    if self.camera is not None:
+                        self.camera.release()
                     continue
                 self.is_running = True
                 self.thread = threading.Thread(target=self._capture_loop)
@@ -144,7 +155,7 @@ class UsbCamera:
                 return True
             except Exception as e:
                 logger.info(f"[USB CAMERA] Erreur avec backend {backend_name}: {e}")
-                if self.camera:
+                if self.camera is not None:
                     self.camera.release()
                 continue
         self.error = f"Impossible d'ouvrir la caméra {self.camera_id} avec tous les backends testés"
@@ -153,7 +164,7 @@ class UsbCamera:
 
     def _reconnect(self):
         logger.info(f"[USB CAMERA] Tentative de reconnexion de la caméra {self.camera_id}...")
-        if self.camera:
+        if self.camera is not None:
             self.camera.release()
         self.camera = None
         time.sleep(1)
@@ -164,7 +175,7 @@ class UsbCamera:
         max_errors = 10
         while self.is_running:
             try:
-                if not self.camera or not self.camera.isOpened():
+                if self.camera is None or not self.camera.isOpened():
                     logger.info(f"[USB CAMERA] Caméra {self.camera_id} déconnectée, tentative de reconnexion...")
                     self._reconnect()
                     time.sleep(1)
@@ -200,7 +211,103 @@ class UsbCamera:
         self.is_running = False
         if self.thread:
             self.thread.join(timeout=1.0)
-        if self.camera:
+        if self.camera is not None:
             self.camera.release()
         logger.info(f"[USB CAMERA] Caméra {self.camera_id} arrêtée")
 
+class MockCamera:
+    """
+    Simulate a camera for development.
+    - If video_path provided, reads frames in loop from that file.
+    - If images_dir provided, cycles through images.
+    - Otherwise generates a test pattern with timestamp.
+    API:
+      cam = MockCamera(video_path="...")  # or images_dir="/path"
+      ret, frame = cam.read()
+      cam.release()
+    """
+
+    def __init__(self, video_path: Optional[str] = None, images_dir: Optional[str] = None,
+                 width: int = 1280, height: int = 720, fps: int = 30):
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self._video = None
+        self._images = []
+        self._idx = 0
+        if video_path:
+            self._video = cv2.VideoCapture(video_path)
+            self._video.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self._video.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if images_dir:
+            import os
+            exts = (".jpg", ".jpeg", ".png", ".bmp")
+            self._images = sorted([os.path.join(images_dir, f) for f in os.listdir(images_dir)
+                                   if f.lower().endswith(exts)])
+        self._last_time = time.time()
+    
+    def start(self):
+        return True
+    
+    def _read_frame(self) -> Optional[np.ndarray]:
+        # Maintain target FPS
+        now = time.time()
+        wait = max(0, (1.0 / self.fps) - (now - self._last_time))
+        if wait > 0:
+            time.sleep(wait)
+        self._last_time = time.time()
+
+        if self._video is not None and self._video.isOpened():
+            ret, frame = self._video.read()
+            if not ret or frame is None:
+                # loop video
+                self._video.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = self._video.read()
+                if not ret or frame is None:
+                    return None
+            frame = cv2.resize(frame, (self.width, self.height))
+            return frame
+
+        if len(self._images) > 0:
+            path = self._images[self._idx % len(self._images)]
+            frame = cv2.imread(path)
+            if frame is None:
+                return None
+            frame = cv2.resize(frame, (self.width, self.height))
+            self._idx += 1
+            return frame
+
+        # Generate test pattern with timestamp
+        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        t = time.strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(frame, f"MockCam {t}", (30, int(self.height/2)), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2, (0,255,0), 2, cv2.LINE_AA)
+        # moving circle
+        x = int((time.time() * 100) % self.width)
+        cv2.circle(frame, (x, int(self.height*0.75)), 30, (0,128,255), -1)
+        return frame
+
+    # Helper pour s'assurer d'avoir des bytes JPEG
+    def _to_jpeg_bytes(self, frame):
+        if frame is None:
+            return None
+        if isinstance(frame, (bytes, bytearray)):
+            return bytes(frame)
+        try:
+            ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            if not ret or jpeg is None:
+                return None
+            return jpeg.tobytes()
+        except Exception as e:
+            logger.info(f"[CAMERA] Erreur encodage frame: {e}")
+            return None
+
+    def get_frame(self):
+        frame = self._read_frame()
+        if frame is None:       
+            return None
+        return self._to_jpeg_bytes(frame)
+
+    def stop(self):
+        if self._video is not None and self._video.isOpened():
+            self._video.release()

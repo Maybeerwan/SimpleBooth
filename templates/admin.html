@@ -123,8 +123,29 @@
                                         </div>
                                     </div>
                                 </div>
+                            <!-- mock Camera Card -->    
                             </div>
-                            
+                                <div class="col-md-6">
+                                    <div class="card camera-option h-100 {{ 'border-primary bg-light' if config.camera_type == 'mock' else 'border-secondary' }}" data-camera-type="mock">
+                                        <div class="card-body text-center p-4">
+                                            <div class="mb-3">
+                                                <i class="fas fa-plug fa-3x text-success"></i>
+                                            </div>
+                                            <h5 class="card-title mb-2">Caméra Mock</h5>
+                                            <p class="card-text text-muted mb-3">
+                                                Caméra pour test<br>
+                                                <small>Uniqement pour des tests</small>
+                                            </p>
+                                            <div class="form-check d-flex justify-content-center">
+                                                <input class="form-check-input me-2" type="radio" name="camera_type" id="camera_type_mock" value="mock" {{ 'checked' if config.camera_type == 'mock' else '' }}>
+                                                <label class="form-check-label fw-bold" for="camera_type_mock">
+                                                    Sélectionner
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>                            
                             <!-- Configuration spécifique USB -->
                             <div id="usb_camera_settings" class="{{ 'd-none' if config.camera_type != 'usb' else '' }}">
                                 <div class="card border-success">
