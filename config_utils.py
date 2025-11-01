@@ -2,9 +2,10 @@ import os
 import json
 import logging
 
-PHOTOS_FOLDER = 'photos'
-EFFECT_FOLDER = 'effet'
-CONFIG_FILE = 'config.json'
+PHOTOS_FOLDER = ''
+EFFECT_FOLDER = ''
+CONFIG_FILE = ''
+SETTINGS_FILE = 'settings.json'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
 DEFAULT_CONFIG = {
@@ -27,7 +28,9 @@ DEFAULT_CONFIG = {
     'printer_enabled': True,
     'printer_port': '/dev/ttyAMA0',
     'printer_baudrate': 9600,
-    'print_resolution': 384
+    'print_resolution': 384, 
+    'led_annimation': 'color_wipe', 
+    'led_delay_transition': 1
 }
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,25 @@ def load_config():
         except Exception:
             pass
     return DEFAULT_CONFIG.copy()
+
+def load_settings():
+    """Load settings from JSON"""
+    global PHOTOS_FOLDER, EFFECT_FOLDER, CONFIG_FILE
+    logger.info(f"Chargement des settings : {SETTINGS_FILE}")
+    result = {}
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                result = json.load(f)
+        except Exception:
+            pass
+    PHOTOS_FOLDER = result.get('photos_folder', 'photos')
+    EFFECT_FOLDER = result.get('effect_folder', 'effet')
+    CONFIG_FILE = result.get('config_file', 'config.json')
+
+    return result
+
+SETTINGS = load_settings()
 
 def save_config(config_data):
     """Save configuration to JSON"""

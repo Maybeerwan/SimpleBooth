@@ -24,6 +24,7 @@ from config_utils import (
 )
 from camera_utils import UsbCamera, detect_cameras, MockCamera
 from telegram_utils import send_to_telegram
+from led_utilities import start_led_animation_mode, stop_led_animation_mode
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'photobooth_secret_key_2024')
@@ -541,6 +542,18 @@ def save_admin_config():
             config['print_resolution'] = int(print_resolution)
         except ValueError:
             config['print_resolution'] = 384
+
+        led_annimation = request.form.get('led_annimation', 'color_wipe').strip()
+        try:
+            config['led_annimation'] = int(led_annimation)
+        except ValueError:
+            config['led_annimation'] = 'color_wipe'
+
+        led_delay_transition = request.form.get('led_delay_transition', '1').strip()
+        try:
+            config['led_delay_transition'] = int(led_delay_transition)
+        except ValueError:
+            config['led_delay_transition'] = 1
         
         save_config(config)
         flash('Configuration sauvegardée avec succès!', 'success')
@@ -859,6 +872,60 @@ def stop_camera():
     camera_active = False
     stop_camera_process()
     return jsonify({'status': 'camera_stopped'})
+
+@app.route('/start_led_animation', methods=['GET'])
+@app.route('/start_led_animation/<mode>', methods=['GET'])
+def start_led_animation(mode: str = 'color_wipe'):
+    """Démarrer l'animation LED.
+    - mode est optionnel : on peut appeler /start_led_animation ou /start_led_animation/<mode>
+    - on accepte aussi query params : ?mode=...&delay=0.2&iterations=10
+    """
+    # Priorité au paramètre query si fourni
+    q_mode = request.args.get('mode')
+    if q_mode:
+        mode = q_mode
+
+    mode = (mode or 'color_wipe').lower()
+
+    # Lire delay et iterations depuis la query string (safe parsing)
+    try:
+        delay = float(request.args.get('delay', 0.5))
+    except (TypeError, ValueError):
+        delay = 0.5
+
+    it = request.args.get('iterations')
+    try:
+        iterations = int(it) if it is not None else None
+    except (TypeError, ValueError):
+        iterations = None
+
+    try:
+        start_led_animation_mode(mode, delay=delay, iterations=iterations)
+        return jsonify({'status': 'led_animation_started', 'mode': mode, 'delay': delay, 'iterations': iterations})
+    except ValueError as e:
+        # start_led_animation_mode lève ValueError si le mode est inconnu
+        return jsonify({'status': 'error', 'error': str(e)}), 400
+    except Exception as e:
+        logger.info(f"[LED] Erreur démarrage animation: {e}")
+        return jsonify({'status': 'error', 'error': 'Erreur interne lors du démarrage de l\'animation'}), 500
+
+@app.route('/stop_led_animation')
+def stop_led_animation():
+    """Arrêter l'animation led"""
+    stop_led_animation_mode()
+    return jsonify({'status': 'led_animation_stopped'})
+
+@app.route('/start_flash')
+def start_flash():
+    """Démarrer le flash"""
+    start_led_animation_mode('all_white')
+    return jsonify({'status': 'flash_started'})
+
+@app.route('/stop_flash')
+def stop_flash():
+    """Arrêter le flash"""
+    stop_led_animation_mode()
+    return jsonify({'status': 'flash_stopped'})
 
 # Nettoyer les processus à la fermeture
 @atexit.register

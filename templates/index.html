@@ -119,7 +119,15 @@ function initCamera() {
             .catch(error => {
                 console.error('Erreur d\'initialisation caméra:', error);
             });
-        
+        // Démarrer l'animation LED'
+        fetch('/start_led_animation?delay=1')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Animation led initialisée:', data.status);
+            })
+            .catch(error => {
+                console.error('Erreur d\'initialisation des animation led:', error);
+            });
     } catch (error) {
         console.error('Erreur d\'accès à la caméra:', error);
         showCameraError();
@@ -150,6 +158,25 @@ function capturePhoto() {
     countdown.classList.remove('d-none');
     
     const countdownInterval = setInterval(() => {
+        // Désactive l'animation LED'
+        fetch('/stop_led_animation')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Stop led initialisée:', data.status);
+            })
+            .catch(error => {
+                console.error('Erreur lors de l\'arret des animation led:', error);
+            });
+        // Active le flash LED'
+        fetch('/start_flash')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Flash initialisée:', data.status);
+            })
+            .catch(error => {
+                console.error('Erreur lors de l\'activation du flash led:', error);
+            });
+            
         countdown.textContent = timeLeft;
         timeLeft--;
         
@@ -165,10 +192,20 @@ function capturePhoto() {
                 
                 // Masquer le flash après un court délai et prendre la photo
                 setTimeout(() => {
-                    flashOverlay.classList.add('d-none');
                     takePicture();
+                    flashOverlay.classList.add('d-none');
                 }, 300);
             }, 200);
+
+                    // Active le flash LED'
+            fetch('/stop_flash')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Flash stop:', data.status);
+                })
+                .catch(error => {
+                    console.error('Erreur lors de l\'arrêt du flash led:', error);
+                });
         }
     }, 1000);
 }

@@ -231,3 +231,27 @@ La configuration est sauvegardée dans `config.json` :
   - Format correct de l'ID (numérique pour privé, commence par `-` pour groupe)
   - Le bot doit être admin pour les canaux
 - **Dossier effet manquant** : L'application le crée automatiquement au démarrage
+
+
+## Utilisation d'un ruban led arddressable
+1. **Brancher le fil data sur le GPIO18 (pin 12)**
+2. **Donner les capabilities à pyhton pour éviter de lancer le programme en sudo**
+- Debug du chemin Python
+  ```bash
+  # Avec le venv activé
+  source ~/SimpleBooth/venv/bin/activate
+  which python
+  ls -la $(which python)
+  ```
+  Le which python peut retourner un lien symbolique. Il faut appliquer setcap sur le fichier réel, pas sur le lien symbolique.
+  
+- Solution : Trouver et utiliser le fichier réel
+  ```bash
+  # Avec le venv activé
+  readlink -f $(which python)
+  ```
+  Puis utilisez le chemin complet retourné :
+  ```bash
+  # Exemple si readlink retourne /usr/bin/python3.13
+  sudo setcap 'cap_sys_rawio,cap_dac_override=ep' /usr/bin/python3.13
+  ```
