@@ -422,6 +422,8 @@ window.addEventListener('beforeunload', function() {
 
 document.addEventListener('keydown', async function(e) {
   // Déclenche uniquement sur la touche Espace, et pas quand l'utilisateur saisit du texte
+  console.log('Touche clavier appuyée : "', e.code,'" "', e.key,'"');
+  
   if (e.code === 'Space' || e.key === ' ') {
     const active = document.activeElement;
     if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
