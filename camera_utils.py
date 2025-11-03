@@ -215,6 +215,191 @@ class UsbCamera:
             self.camera.release()
         logger.info(f"[USB CAMERA] Caméra {self.camera_id} arrêtée")
 
+
+class MyPicammera:
+    def __init__(
+        self,
+        resolution: Tuple[int, int] = (1280, 720),
+        framerate: int = 15,
+        qr_enabled: bool = False,
+        qr_callback: Optional[callable] = None,
+        detect_every_n_frames: int = 5,
+        detect_downscale_width: int = 640,
+        qr_debounce_seconds: float = 2.0,
+    ):
+        """
+        Implémentation Picamera2 :
+        - configure Picamera2 pour renvoyer des tableaux RGB
+        - start() lance la capture en thread
+        - options QR : qr_enabled, qr_callback(data, points)
+        """
+        self.resolution = resolution
+        self.framerate = framerate
+        self.picam2 = None
+        self.is_running = False
+        self.thread = None
+        self.frame = None
+        self.lock = threading.Lock()
+        self.error = None
+
+        # QR settings
+        self.qr_enabled = qr_enabled
+        self.qr_callback = qr_callback
+        self.detect_every_n_frames = max(1, int(detect_every_n_frames))
+        self.detect_downscale_width = max(32, int(detect_downscale_width))
+        self.qr_debounce_seconds = float(qr_debounce_seconds)
+        self._frame_count = 0
+        self._last_qr = None
+        self._last_qr_ts = 0.0
+        self.qr_detector = None
+
+        try:
+            from picamera2 import Picamera2
+            self.picam2 = Picamera2()
+            # Configuration simple pour preview/still en RGB
+            try:
+                cfg = self.picam2.create_preview_configuration(main={"size": self.resolution, "format": "RGB888"})
+            except Exception:
+                cfg = self.picam2.create_still_configuration(main={"size": self.resolution, "format": "RGB888"})
+            self.picam2.configure(cfg)
+        except Exception as e:
+            self.picam2 = None
+            self.error = f"Picamera2 unavailable: {e}"
+            logger.info(f"[PICAM] Erreur d'initialisation Picamera2: {e}")
+
+        self.enable_qr_detection(qr_enabled)
+
+
+    def enable_qr_detection(self, enabled: bool):
+        ''' Activer/désactiver la détection QR '''
+        self.qr_enabled = enabled
+        if self.qr_enabled and self.qr_detector is None:
+            try:
+                self.qr_detector = cv2.QRCodeDetector()
+            except Exception as e:
+                logger.info(f"[PICAM][QR] Impossible d'initialiser QR detector: {e}")
+                self.qr_detector = None
+                self.qr_enabled = False
+        elif not self.qr_enabled:
+            self.qr_detector = None
+          
+
+    def start(self):
+        if self.is_running:
+            return True
+        if self.picam2 is None:
+            logger.info(f"[PICAM] start() impossible: {self.error}")
+            return False
+        try:
+            self.picam2.start()
+            self.is_running = True
+            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self.thread.start()
+            logger.info("[PICAM] Picamera2 démarrée")
+            return True
+        except Exception as e:
+            self.error = f"Failed to start Picamera2: {e}"
+            logger.error(f"[PICAM] Erreur lors du démarrage Picamera2: {e}")
+            return False
+
+    def _capture_loop(self):
+        period = 1.0 / max(1, self.framerate)
+        consecutive_errors = 0
+        max_errors = 10
+        while self.is_running:
+            try:
+                arr = self.picam2.capture_array()
+                if arr is None:
+                    consecutive_errors += 1
+                    logger.info(f"[PICAM] capture_array renvoyé None (tentative {consecutive_errors}/{max_errors})")
+                    if consecutive_errors >= max_errors:
+                        logger.info("[PICAM] trop d'erreurs, arrêt capture")
+                        self.is_running = False
+                    time.sleep(0.1)
+                    continue
+                consecutive_errors = 0
+
+                # conversion RGB -> BGR pour OpenCV
+                try:
+                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                except Exception:
+                    bgr = arr
+
+                # Détection QR (optionnelle, cadencée et redimensionnée)
+                if self.qr_enabled and self.qr_detector is not None:
+                    self._frame_count += 1
+                    if (self._frame_count % self.detect_every_n_frames) == 0:
+                        try:
+                            h, w = arr.shape[:2]
+                            scale = 1.0
+                            if w > self.detect_downscale_width:
+                                scale = float(self.detect_downscale_width) / float(w)
+                                new_w = int(w * scale)
+                                new_h = int(h * scale)
+                                small = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                                small_w = new_w
+                            else:
+                                small = arr
+                                small_w = w
+                            # detectAndDecode accepte BGR ou gray
+                            data, points, _ = self.qr_detector.detectAndDecode(small)
+                            if data:
+                                now = time.time()
+                                # éviter répétitions trop fréquentes
+                                if data != self._last_qr or (now - self._last_qr_ts) > self.qr_debounce_seconds:
+                                    self._last_qr = data
+                                    self._last_qr_ts = now
+                                    logger.info(f"[PICAM][QR] QR détecté: {data}")
+                                    if callable(self.qr_callback):
+                                        # Remapper les points vers la taille originale si nécessaire
+                                        pts_copy = None
+                                        if points is not None:
+                                            try:
+                                                pts_arr = points.reshape(-1, 2)
+                                                # remap : coord_orig = coord_small * (orig_width / small_width)
+                                                inv_scale = float(w) / float(small_w) if small_w != 0 else 1.0
+                                                orig_corners = [(int(x * inv_scale), int(y * inv_scale)) for x, y in pts_arr]
+                                                pts_copy = orig_corners
+                                            except Exception:
+                                                pts_copy = None
+                                        threading.Thread(target=self.qr_callback, args=(data, pts_copy), daemon=True).start()
+                        except Exception as e:
+                            logger.info(f"[PICAM][QR] Erreur détection QR: {e}")
+
+                # encoder en JPEG
+                try:
+                    ret, jpeg = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    if ret and jpeg is not None:
+                        with self.lock:
+                            self.frame = jpeg.tobytes()
+                except Exception as e:
+                    logger.info(f"[PICAM] Erreur encodage JPEG: {e}")
+
+                time.sleep(period)
+            except Exception as e:
+                consecutive_errors += 1
+                logger.info(f"[PICAM] Erreur capture Picamera2: {e} (tentative {consecutive_errors}/{max_errors})")
+                if consecutive_errors >= max_errors:
+                    logger.info("[PICAM] trop d'erreurs, arrêt capture")
+                    self.is_running = False
+                time.sleep(0.1)
+
+    def get_frame(self):
+        with self.lock:
+            return self.frame
+
+    def stop(self):
+        self.is_running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+        try:
+            if self.picam2 is not None:
+                self.picam2.stop()
+                logger.info("[PICAM] Picamera2 arrêtée")
+        except Exception as e:
+            logger.info(f"[PICAM] Erreur lors de l'arrêt Picamera2: {e}")
+
+
 class MockCamera:
     """
     Simulate a camera for development.

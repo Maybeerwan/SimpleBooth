@@ -56,3 +56,8 @@ psutil==5.9.6
 PyYAML==6.0.1
 coloredlogs==15.0.1
 humanfriendly==10.0
+
+# controle des LEDs
+rpi-ws281x==5.0.0
+
+keyboard

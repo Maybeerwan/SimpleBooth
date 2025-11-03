@@ -13,6 +13,10 @@ import signal
 import atexit
 import base64
 import sys
+import queue
+import json
+import shutil
+from flask import stream_with_context
 from datetime import datetime
 from runware import Runware, IImageInference
 from config_utils import (
@@ -21,10 +25,12 @@ from config_utils import (
     load_config,
     save_config,
     ensure_directories,
+    SETTINGS
 )
-from camera_utils import UsbCamera, detect_cameras, MockCamera
+from camera_utils import UsbCamera, detect_cameras, MockCamera, MyPicammera
 from telegram_utils import send_to_telegram
-from led_utilities import start_led_animation_mode, stop_led_animation_mode
+from led_utilities import start_led_animation_mode, start_led_multiple_animation_mode, stop_led_animation_mode, release_strip
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'photobooth_secret_key_2024')
@@ -143,7 +149,7 @@ config = load_config()
 current_photo = None
 camera_active = False
 camera_process = None
-usb_camera = None
+my_camera = None
 
 @app.route('/')
 def index():
@@ -704,7 +710,7 @@ def video_stream():
 
 def generate_video_stream():
     """Générer le flux vidéo MJPEG selon le type de caméra configuré"""
-    global camera_process, usb_camera, last_frame
+    global camera_process, my_camera, last_frame
     
     # Déterminer le type de caméra à utiliser
     camera_type = config.get('camera_type', 'picamera')
@@ -717,13 +723,13 @@ def generate_video_stream():
         if camera_type == 'usb':
             logger.info("[CAMERA] Démarrage de la caméra USB...")
             camera_id = config.get('usb_camera_id', 0)
-            usb_camera = UsbCamera(camera_id=camera_id)
-            if not usb_camera.start():
+            my_camera = UsbCamera(camera_id=camera_id)
+            if not my_camera.start():
                 raise Exception(f"Impossible de démarrer la caméra USB avec ID {camera_id}")
             
             # Générateur de frames pour la caméra USB
             while True:
-                frame = usb_camera.get_frame()
+                frame = my_camera.get_frame()
                 if frame:
                     # Stocker la frame pour capture instantanée
                     with frame_lock:
@@ -739,13 +745,13 @@ def generate_video_stream():
         
         elif camera_type == 'mock':
             logger.info("[CAMERA] Démarrage de la caméra Mock...")
-            mock_camera = MockCamera()
-            if not mock_camera.start():
+            my_camera = MockCamera()
+            if not my_camera.start():
                 raise Exception("Impossible de démarrer la caméra Mock")
             
             # Générateur de frames pour la caméra Mock
             while True:
-                frame = mock_camera.get_frame()
+                frame = my_camera.get_frame()
                 if frame:
                     # Stocker la frame pour capture instantanée
                     with frame_lock:
@@ -758,6 +764,27 @@ def generate_video_stream():
                            frame + b'\r\n')
                 else:
                     time.sleep(0.03)  # Attendre si pas de frame disponible
+        elif camera_type == 'picamera':
+            logger.info("[CAMERA] Démarrage de la Pi Camera python...")
+            my_camera = MyPicammera(qr_enabled=True, qr_callback=on_qr_detected, detect_every_n_frames=5, detect_downscale_width=640)
+            if not my_camera.start():
+                raise Exception("Impossible de démarrer la Pi Camera python")  
+            # Générateur de frames pour la Pi Camera
+            while True: 
+                frame = my_camera.get_frame()
+                if frame:
+                    # Stocker la frame pour capture instantanée
+                    with frame_lock:
+                        last_frame = frame
+                    
+                    # Envoyer la frame au navigateur
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n'
+                           b'Content-Length: ' + str(len(frame)).encode() + b'\r\n\r\n' +
+                           frame + b'\r\n')
+                else:
+                    time.sleep(0.03)  # Attendre si pas de frame disponible
+        
         # Utiliser la Pi Camera par défaut
         else:
             logger.info("[CAMERA] Démarrage de la Pi Camera...")
@@ -821,7 +848,7 @@ def generate_video_stream():
                                jpeg_frame + b'\r\n')
                                
                 except Exception as e:
-                    logger.info(f"[CAMERA] Erreur lecture flux: {e}")
+                    logger.error(f"[CAMERA] Erreur lecture flux: {e}")
                     break
                 
     except Exception as e:
@@ -834,17 +861,22 @@ def generate_video_stream():
     finally:
         stop_camera_process()
 
+def on_qr_detected(data, points):
+    logger.info(f"QR reçu: {data}")
+    # ex: notifier les clients SSE
+    notify_clients_event({'event': 'qr_detected', 'data': data})
+
 def stop_camera_process():
     """Arrêter proprement le processus caméra (Pi Camera ou USB)"""
-    global camera_process, usb_camera
+    global camera_process, my_camera
     
     # Arrêter la caméra USB si active
-    if usb_camera:
+    if my_camera:
         try:
-            usb_camera.stop()
+            my_camera.stop()
         except Exception as e:
             logger.info(f"[CAMERA] Erreur lors de l'arrêt de la caméra USB: {e}")
-        usb_camera = None
+        my_camera = None
     
     # Arrêter le processus libcamera-vid si actif
     if camera_process:
@@ -918,7 +950,13 @@ def stop_led_animation():
 @app.route('/start_flash')
 def start_flash():
     """Démarrer le flash"""
-    start_led_animation_mode('all_white')
+    # start_led_animation_mode('all_white')
+    modes = [
+        {'name':'all_red','duration':0.2,'delay':0.2,'brightness':255},
+        {'name':'all_white','duration':0.8,'delay':0.2,'brightness':255}        
+    ]
+    start_led_multiple_animation_mode(modes)
+
     return jsonify({'status': 'flash_started'})
 
 @app.route('/stop_flash')
@@ -927,15 +965,232 @@ def stop_flash():
     stop_led_animation_mode()
     return jsonify({'status': 'flash_stopped'})
 
+# SSE subscribers
+_sse_subscribers: list = []
+_sse_lock = threading.Lock()
+
+def _event_stream(q: "queue.Queue"):
+    try:
+        while True:
+            msg = q.get()
+            # format SSE simple
+            yield f"data: {json.dumps(msg)}\n\n"
+    finally:
+        # remove subscriber on disconnect
+        with _sse_lock:
+            try:
+                _sse_subscribers.remove(q)
+            except ValueError:
+                pass
+
+@app.route('/events')
+def events():
+    """Endpoint SSE pour pousser les events vers le front."""
+    q = queue.Queue()
+    with _sse_lock:
+        _sse_subscribers.append(q)
+    headers = {'Cache-Control': 'no-cache', 'Connection': 'keep-alive'}
+    return Response(stream_with_context(_event_stream(q)), mimetype='text/event-stream', headers=headers)
+
+def notify_clients_event(payload: dict):
+    """Poster un message JSON à tous les clients SSE connectés."""
+    with _sse_lock:
+        for q in list(_sse_subscribers):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                # ignore erreurs de queue
+                pass
+
+# Actionneur clavier en-process qui notifie les clients SSE (déclenche front)
+def _action_listener_worker():
+    try:
+        import keyboard
+    except Exception as e:
+        logger.info(f"[ACTION] Module keyboard non disponible: {e}")
+        return
+
+    start_capture_code = SETTINGS.get('button_start_capture', 115) 
+    debounce = SETTINGS.get('button_action_debounce', '0.5')
+
+    logger.info(f"[ACTION] Listener clavier démarré (scan_code={start_capture_code})")
+    last_time = 0.0
+    try:
+        while True:
+            ev = keyboard.read_event()
+            if ev is None:
+                continue
+            if getattr(ev, "scan_code", None) == start_capture_code and getattr(ev, "event_type", "") == keyboard.KEY_DOWN:
+                now = time.time()
+                if now - last_time < debounce:
+                    continue
+                last_time = now
+                logger.info("[ACTION] VolumeUp détecté -> notification front")
+                # envoyer event au front (les navigateurs appelleront la logique capture)
+                notify_clients_event({'event': 'trigger_capture', 'ts': int(time.time())})
+    except Exception as e:
+        logger.exception(f"[ACTION] Listener erreur: {e}")
+
+
+def start_action_listener():
+    """Démarrer le listener clavier en background si activé par variable d'env."""
+    if os.environ.get('START_ACTIONNEUR', '1') != '1':
+        logger.info("[ACTION] Actionneur désactivé par configuration")
+        return
+
+    t = threading.Thread(target=_action_listener_worker, daemon=True)
+    t.start()
+    logger.info("[ACTION] Thread actionneur démarré")
+
+# Enregistrement robuste au démarrage de l'app
+def _register_startup_handler():
+    try:
+        # Flask >= 2.0 : before_serving existe et est appelé quand le serveur est prêt
+        if hasattr(app, "before_serving"):
+            app.before_serving(start_action_listener)
+            logger.info("[STARTUP] Registered start_action_listener with app.before_serving()")
+            return
+        # Fallback historique
+        if hasattr(app, "before_first_request"):
+            app.before_first_request(start_action_listener)
+            logger.info("[STARTUP] Registered start_action_listener with app.before_first_request()")
+            return
+    except Exception as e:
+        logger.info(f"[STARTUP] Enregistrement startup handler échoué: {e}")
+
+    # Dernier recours : démarrer immédiatement en background (utile pour environnements où les hook ne sont pas présents)
+    try:
+        threading.Thread(target=start_action_listener, daemon=True).start()
+        logger.info("[STARTUP] start_action_listener démarré directement en background (fallback)")
+    except Exception as e:
+        logger.info(f"[STARTUP] Impossible de démarrer start_action_listener en fallback: {e}")
+
+# Appeler l'enregistrement juste après la définition
+_register_startup_handler()
+
+@app.route('/debug/trigger', methods=['GET'])
+def debug_trigger():
+    """Endpoint de debug : notifie les clients SSE comme si VolumeUp avait été pressé."""
+    try:
+        notify_clients_event({'event': 'trigger_capture', 'ts': int(time.time())})
+        return jsonify({'ok': True, 'sent': True})
+    except Exception as e:
+        logger.exception("Erreur debug_trigger: %s", e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 # Nettoyer les processus à la fermeture
 @atexit.register
 def cleanup():
     logger.info("[APP] Arrêt de l'application, nettoyage des ressources...")
     stop_camera_process()
+    release_strip()
 
 def signal_handler(sig, frame):
+    logger.info("[APP] Signal d'arrêt reçu, fermeture de l'application...")
     stop_camera_process()
+    release_strip()
     exit(0)
+
+# === Ajout: endpoints pour la page start / vérification wifi / connexion via QR ===
+
+@app.route('/start')
+def start_page():
+    """Page d'accueil au démarrage: vérifie la connexion réseau et lance le scan QR si nécessaire."""
+    return render_template('start.html', config=config)
+
+@app.route('/api/ping')
+def api_ping():
+    """Test internet simple (retourne True si on peut atteindre un host public)."""
+    try:
+        # tentative rapide vers un site public, timeout court
+        resp = requests.get('https://www.google.com/generate_204', timeout=2)
+        time.sleep(2)
+        # return jsonify({'online': resp.status_code == 204}) 
+        return jsonify({'online': False}) 
+    except Exception:
+        return jsonify({'online': False})
+
+def parse_wifi_qr(data: str):
+    """
+    Parse un QR WiFi de type: WIFI:S:MySSID;T:WPA;P:MyPass;H:false;;
+    Retourne (ssid, password, security) ou (None, None, None) si inconnue.
+    """
+    if not data:
+        return None, None, None
+    s = data.strip()
+    # JSON simple possible
+    try:
+        obj = json.loads(s)
+        ssid = obj.get('ssid') or obj.get('S')
+        password = obj.get('password') or obj.get('P')
+        security = obj.get('auth') or obj.get('T') or 'WPA'
+        if ssid:
+            return ssid, password, security
+    except Exception:
+        pass
+
+    # WIFI: format
+    if s.upper().startswith('WIFI:'):
+        # enlever préfixe et trailing ;;
+        body = s[5:]
+        if body.endswith(';;'):
+            body = body[:-2]
+        parts = {}
+        for kv in body.split(';'):
+            if not kv:
+                continue
+            if ':' in kv:
+                k, v = kv.split(':', 1)
+                parts[k] = v
+        ssid = parts.get('S') or parts.get('s')
+        password = parts.get('P') or parts.get('p')
+        security = parts.get('T') or parts.get('t') or 'WPA'
+        return ssid, password, security
+
+    # fallback: treat whole string as SSID (open network)
+    return s, None, 'OPEN'
+
+@app.route('/connect_wifi', methods=['POST'])
+def connect_wifi():
+    """
+    Tentative de connexion WiFi via nmcli.
+    Corps attendu: JSON { "data": "<qr raw string>", "points": [...] }
+    """
+    try:
+        payload = request.get_json(force=True)
+        raw = payload.get('data') if payload else None
+        ssid, password, security = parse_wifi_qr(raw)
+        if not ssid:
+            return jsonify({'success': False, 'error': 'SSID introuvable dans le QR'}), 400
+
+        # Vérifier la présence de nmcli
+        if not shutil.which('nmcli'):
+            return jsonify({'success': False, 'error': 'nmcli introuvable dans le système. Impossible de connecter automatiquement.'}), 500
+
+        # Construire commande nmcli selon security
+        if password:
+            cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password]
+        else:
+            cmd = ['nmcli', 'device', 'wifi', 'connect', ssid]
+
+        logger.info(f"[WIFI] Tentative connexion WiFi SSID={ssid} via nmcli")
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0:
+            # arrêt de la caméra si elle tourne
+            try:
+                stop_camera_process()
+            except Exception:
+                pass
+            return jsonify({'success': True, 'message': f'Connecté au réseau {ssid}'})
+        else:
+            logger.info(f"[WIFI] nmcli stderr: {proc.stderr.strip()}")
+            return jsonify({'success': False, 'error': proc.stderr.strip() or 'Erreur nmcli'}), 500
+
+    except Exception as e:
+        logger.exception(f"[WIFI] Erreur connexion wifi: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)

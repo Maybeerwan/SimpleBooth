@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Photobooth - Démarrage{% endblock %}
+
+{% block content %}
+  <div class="box">
+    <h1>Initialisation réseau</h1>
+
+    <div id="status" class="status">Vérification de la connexion internet…</div>
+
+    <div id="scanner" style="display:none">
+      <p>Scannez un QR Wi‑Fi pour vous connecter automatiquement.</p>
+
+      <!-- video container: limite la hauteur à 50vh et centre le flux -->
+      <div class="video-container-preview">
+        <img id="mjpeg" class="video" src="/video_stream" alt="Flux caméra MJPEG">
+      </div>
+
+      <div class="controls">
+        <button id="stopBtn">Arrêter le scanner</button>
+      </div>
+      <h3>Journal</h3>
+      <div id="log"></div>
+    </div>
+  </div>
+  
+{% endblock %}
+
+
+{% block styles %}
+
+  <style>
+    img.video {
+      display: block;
+      max-height: 50vh;   /* hauteur maximale : moitié de la fenêtre */
+      height: auto;
+      width: auto;        /* adapte la largeur pour garder le ratio */
+      max-width: 100%;    /* ne dépasse pas la largeur du conteneur */
+      margin: 0 auto;
+    }
+    /* optionnel : centrer et préserver mise en page */
+    .box { display: flex; flex-direction: column; align-items: center; }
+
+        /* ---> Correction : permettre l'affichage sur plusieurs lignes dans le journal */
+    #log {
+      white-space: pre-wrap;            /* respecte les retours à la ligne */
+      font-family: Menlo, Monaco, monospace;
+      padding: 0.6rem;
+      border-radius: 4px;
+      width: 100%;
+      max-width: 800px;
+      height: 160px;
+      overflow: auto;
+      box-sizing: border-box;
+    }
+  </style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const logEl = document.getElementById('log');
+function log(s){ logEl.textContent = (new Date()).toLocaleTimeString() + ' — ' + s + '\n' + logEl.textContent; }
+
+async function checkOnline(){
+  try{
+    // teste la connectivité réelle via l'endpoint serveur
+    const r = await fetch('/api/ping', {cache:'no-store'});
+    if(!r.ok) return false;
+    const j = await r.json();
+    return !!j.online;
+  }catch(e){
+    return false;
+  }
+}
+
+async function startFlow(){
+  document.getElementById('status').textContent = 'Vérification de la connexion internet…';
+  const online = await checkOnline();
+  if(online){
+    document.getElementById('status').textContent = 'Connexion détectée — redirection vers la page principale';
+    setTimeout(()=> window.location.href='/', 600);
+    return;
+  }
+
+  document.getElementById('status').textContent = '';
+  log('Aucune connexion détectée — activation du scanner QR');
+  document.getElementById('scanner').style.display = 'block';
+
+  // démarrer la caméra côté serveur
+  try{
+    await fetch('/start_camera');
+    log('Caméra démarrée (serveur).');
+  }catch(e){
+    log('Erreur démarrage caméra: ' + e);
+  }
+
+  // SSE listener pour les QR détectés
+  const es = new EventSource('/events');
+  es.onmessage = function(ev){
+    try{
+      const msg = JSON.parse(ev.data);
+      if(msg.event === 'qr_detected' && msg.data){
+        log('QR détecté: ' + msg.data);
+        // tenter connexion automatique
+        connectWifi(msg.data);
+      }
+    }catch(e){
+      log('Erreur décodate QR code: ' + e);
+    }
+  };
+  es.onerror = function(){ log('SSE erreur (connexion events)'); };
+
+  // Stop button
+  document.getElementById('stopBtn').addEventListener('click', async ()=>{
+    try{
+      await fetch('/stop_camera');
+      log('Scanner arrêté.');
+      // rester sur la page pour tenter manuellement ou rediriger vers index
+      document.getElementById('status').textContent = 'Scanner arrêté par l\'utilisateur.';
+    }catch(e){
+      log('Erreur arrêt scanner: ' + e);
+    }
+  });
+}
+
+let connecting = false;
+async function connectWifi(qrData){
+  if(connecting) return;
+  connecting = true;
+  log('Tentative de connexion au réseau depuis QR…');
+  try{
+    const r = await fetch('/connect_wifi', {
+      method: 'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ data: qrData })
+    });
+    const j = await r.json();
+    if(r.ok && j.success){
+      log('Connexion réussie: ' + (j.message || 'OK'));
+      // petite attente puis redirection vers index
+      setTimeout(()=> window.location.href='/', 800);
+    }else{
+      log('Échec connexion: ' + (j.error || JSON.stringify(j)));
+    }
+  }catch(e){
+    log('Erreur requête connexion: ' + e);
+  }finally{
+    connecting = false;
+  }
+}
+
+// démarrage automatique
+startFlow();
+</script>
+{% endblock %}

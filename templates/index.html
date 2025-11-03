@@ -156,27 +156,19 @@ function capturePhoto() {
     // Démarrer le compte à rebours
     let timeLeft = parseInt('{{ timer }}');
     countdown.classList.remove('d-none');
-    
+
+    // Active le flash LED'
+    fetch('/start_flash')
+        .then(response => response.json())
+        .then(data => {
+            console.log('Flash initialisée:', data.status);
+        })
+        .catch(error => {
+            console.error('Erreur lors de l\'activation du flash led:', error);
+        });
+        
     const countdownInterval = setInterval(() => {
-        // Désactive l'animation LED'
-        fetch('/stop_led_animation')
-            .then(response => response.json())
-            .then(data => {
-                console.log('Stop led initialisée:', data.status);
-            })
-            .catch(error => {
-                console.error('Erreur lors de l\'arret des animation led:', error);
-            });
-        // Active le flash LED'
-        fetch('/start_flash')
-            .then(response => response.json())
-            .then(data => {
-                console.log('Flash initialisée:', data.status);
-            })
-            .catch(error => {
-                console.error('Erreur lors de l\'activation du flash led:', error);
-            });
-            
+
         countdown.textContent = timeLeft;
         timeLeft--;
         
@@ -196,16 +188,6 @@ function capturePhoto() {
                     flashOverlay.classList.add('d-none');
                 }, 300);
             }, 200);
-
-                    // Active le flash LED'
-            fetch('/stop_flash')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Flash stop:', data.status);
-                })
-                .catch(error => {
-                    console.error('Erreur lors de l\'arrêt du flash led:', error);
-                });
         }
     }, 1000);
 }
@@ -222,6 +204,16 @@ async function takePicture() {
         const result = await response.json();
         
         if (result.success) {
+                        // désactive le flash LED'
+            fetch('/stop_flash')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Flash stop:', data.status);
+                })
+                .catch(error => {
+                    console.error('Erreur lors de l\'arrêt du flash led:', error);
+                });
+            
             // Rediriger vers la page de révision
             window.location.href = '/review';
         } else {
@@ -433,5 +425,31 @@ document.addEventListener('keydown', async function(e) {
     capturePhoto() ;
   }
 });
+
+// Ecoute Server-Sent Events depuis le serveur pour déclenchements externes
+(function() {
+    try {
+        const evtSource = new EventSource('/events');
+        evtSource.onmessage = function(e) {
+            try {
+                const msg = JSON.parse(e.data);
+                if (msg && msg.event === 'trigger_capture') {
+                    console.log('Event trigger_capture reçu depuis le serveur', msg);
+                    // Appeler la logique de prise (compte à rebours + animation) une seule fois
+                    // Si déjà en capture, la fonction ignore
+                    capturePhoto();
+                }
+            } catch (err) {
+                console.error('Erreur parsing SSE message', err, e.data);
+            }
+        };
+        evtSource.onerror = function(err) {
+            console.warn('SSE connection error', err);
+            // Le navigateur reconnecte automatiquement ; on peut gérer backoff si besoin
+        };
+    } catch (e) {
+        console.warn('SSE non supporté ou erreur création EventSource', e);
+    }
+})();
 </script>
 {% endblock %}

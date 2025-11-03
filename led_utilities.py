@@ -36,6 +36,9 @@ except Exception:
         def getPixelColor(self, i: int) -> int:
             return int(self._pixels[int(i)])
 
+        def setBrightness(self, brightness: int):
+            self._brightness = int(brightness)
+
         def show(self):
             # tentative d'affichage coloré si le terminal supporte ANSI 24-bit
             out = []
@@ -52,7 +55,7 @@ import threading
 import random
 import math
 from config_utils import SETTINGS
-from typing import Optional
+from typing import Optional, List, Union, Dict, Any
 
 
 # couleurs différentes sur chaque LED
@@ -130,6 +133,7 @@ def release_strip():
     Éteint et libère le singleton (safe). Appeler au shutdown ou si on veut
     s'assurer que le hardware est propre avant de quitter.
     """
+
     global _strip_singleton, _strip_created_here
     stop_led_animation_mode()
     with _strip_lock:
@@ -303,15 +307,15 @@ def animation_twinkle(strip, delay, iterations, stop_event):
             break
         step += 1
 
-def animation_all_white(strip, delay, iterations, stop_event):
+def _animation_all_color(strip, delay, iterations, stop_event, color, brightness=255):
     """Met toutes les LEDs en blanc. Reste ainsi en boucle si iterations=None."""
     length = strip.numPixels()
     step = 0
-    white = Color(255, 255, 255)
     try:
         while not stop_event.is_set() and (iterations is None or step < iterations):
             for i in range(length):
-                strip.setPixelColor(i, white)
+                strip.setPixelColor(i, color)
+            strip.setBrightness(brightness)
             strip.show()
             # attend de façon interruptible
             if stop_event.wait(delay):
@@ -320,6 +324,13 @@ def animation_all_white(strip, delay, iterations, stop_event):
     finally:
         # si on a été arrêté et qu'on doit éteindre, ne rien faire (caller gère l'état)
         pass
+def animation_all_white(strip, delay, iterations, stop_event):
+    white = Color(255, 255, 255)
+    _animation_all_color(strip, delay, iterations, stop_event, white)
+
+def animation_all_red(strip, delay, iterations, stop_event):
+    red = Color(255, 0, 0)
+    _animation_all_color(strip, delay, iterations, stop_event, red)
 
 # mapping name -> function
 _ANIMATIONS = {
@@ -331,12 +342,13 @@ _ANIMATIONS = {
     "pulse": animation_pulse,
     "twinkle": animation_twinkle,
     "all_white": animation_all_white,  # ajouté : toutes les LEDs en blanc
+    "all_red": animation_all_red,  # ajouté : toutes les LEDs en rouge
 }
 # Mode controller (indépendant du LEDAnimator précédent)
 _led_mode_thread = None
 _led_mode_stop = None
 
-def start_led_animation_mode(name: str = "color_wipe", delay: float = 0.5, iterations: int | None = None, use_strip: PixelStrip | None = None):
+def start_led_animation_mode(name: str = "color_wipe", delay: float = 0.5, brightness:int = 255 , iterations: int | None = None, use_strip: PixelStrip | None = None):
     """Start a named animation in background (interruptible)."""
     global _led_mode_thread, _led_mode_stop
     stop_led_animation_mode()
@@ -344,6 +356,7 @@ def start_led_animation_mode(name: str = "color_wipe", delay: float = 0.5, itera
     if func is None:
         raise ValueError(f"Animation inconnue: {name}")
     strip, created = _ensure_strip(use_strip)
+    strip.setBrightness(brightness)
     _led_mode_stop = threading.Event()
 
     def _runner():
@@ -361,6 +374,101 @@ def start_led_animation_mode(name: str = "color_wipe", delay: float = 0.5, itera
     _led_mode_thread = threading.Thread(target=_runner, daemon=True)
     _led_mode_thread.start()
 
+def start_led_multiple_animation_mode(
+    modes: List[Union[str, tuple, Dict[str, Any]]],
+    per_frame_delay: float = 0.5,
+    default_mode_duration: Optional[float] = 5.0,
+    switch_pause: float = 0.2,
+    use_strip: PixelStrip | None = None
+):
+    """
+    Enchaine plusieurs animations (par nom) en boucle.
+    - modes peut être :
+        - ['rainbow_cycle', 'scanner']
+        - [('rainbow_cycle', 8.0), ('scanner', 3.0)]
+        - [{'name':'chase','duration':10,'delay':0.05,'brightness':255}, 'all_white']
+    - per_frame_delay : delay par défaut passé à chaque animation (si aucune valeur 'delay' fournie pour l'animation)
+    - default_mode_duration : durée par défaut pour chaque animation si non fournie (None pour indéfini)
+    - switch_pause : pause entre deux animations
+    - use_strip : PixelStrip optionnel à réutiliser
+    """
+    global _led_mode_thread, _led_mode_stop, _led_multi_stop
+
+    stop_led_animation_mode()
+
+    if not modes:
+        raise ValueError("Aucune animation fournie pour start_led_multiple_animation_mode")
+
+    # Normaliser les entrées en liste d'objets {name, duration, delay}
+    normalized = []
+    for m in modes:
+        if isinstance(m, str):
+            normalized.append({'name': m, 'duration': default_mode_duration, 'delay': per_frame_delay})
+        elif isinstance(m, tuple) and len(m) >= 1:
+            name = m[0]
+            dur = float(m[1]) if len(m) > 1 and m[1] is not None else default_mode_duration
+            d = float(m[2]) if len(m) > 2 and m[2] is not None else per_frame_delay
+            normalized.append({'name': name, 'duration': dur, 'delay': d})
+        elif isinstance(m, dict):
+            name = m.get('name')
+            if not name:
+                raise ValueError("Dict mode doit contenir la clé 'name'")
+            dur = None if 'duration' in m and m['duration'] is None else float(m.get('duration', default_mode_duration))
+            d = float(m.get('delay', per_frame_delay))
+            b = int(m.get('brightness', 255))
+            normalized.append({'name': name, 'duration': dur, 'delay': d, 'brightness': b})
+        else:
+            raise ValueError(f"Mode invalide: {m!r}")
+
+    # Valider noms
+    for item in normalized:
+        if item['name'] not in _ANIMATIONS:
+            raise ValueError(f"Animation inconnue: {item['name']}")
+
+    strip, created = _ensure_strip(use_strip)
+    _led_mode_stop = threading.Event()
+
+    def _runner():
+        try:
+            while not _led_mode_stop.is_set():
+                for item in normalized:
+                    if _led_mode_stop.is_set():
+                        break
+                    func = _ANIMATIONS.get(item['name'])
+                    if func is None:
+                        continue
+                    delay = max(0.001, float(item.get('delay', per_frame_delay)))
+                    duration = item.get('duration', default_mode_duration)
+                    brightness = int(item.get('brightness', 255))
+                    strip.setBrightness(brightness)
+                    if duration is None:
+                        iterations = None
+                    else:
+                        iterations = int(max(1, duration / delay))
+                    try:
+                        func(strip, delay, iterations, _led_mode_stop)
+                    except Exception:
+                        pass
+                    if _led_mode_stop.is_set():
+                        break
+                    if _led_mode_stop.wait(switch_pause):
+                        break
+        finally:
+            if created:
+                try:
+                    for i in range(strip.numPixels()):
+                        strip.setPixelColor(i, Color(0, 0, 0))
+                    strip.show()
+                except Exception:
+                    pass
+
+    _led_mode_thread = threading.Thread(target=_runner, daemon=True)
+    _led_mode_thread.start()
+
+    return True
+
+
+
 def stop_led_animation_mode(wait: bool = True):
     """Stop the named animation started with start_led_animation_mode."""
     global _led_mode_thread, _led_mode_stop
@@ -374,3 +482,23 @@ def stop_led_animation_mode(wait: bool = True):
 # Usage examples (en Python):
 # start_led_animation_mode("rainbow_cycle", delay=0.02)
 # stop_led_animation_mode()
+
+'''
+Courte explication — ce que fait le paramètre delay
+
+C'est le temps d'attente entre deux "frames" / étapes de l'animation, exprimé en secondes (float).
+Concrètement, chaque boucle d'animation appelle stop_event.wait(delay) — donc delay contrôle la cadence et rend l'arrêt interruptible.
+Pour les fonctions qui convertissent une durée en nombre d'itérations (iterations = duration / delay), delay fixe la granularité temporelle : plus petit → plus d'itérations pour une même durée.
+Conséquences pratiques
+
+Petite valeur (ex. 0.01–0.05) → animation fluide/rapide, plus de charge CPU / update LED.
+Valeur élevée (ex. 0.3–1.0) → animation lente, faible consommation CPU.
+Ne pas mettre delay trop petit (< ~0.001) (peu utile et risque de surcharger CPU/hardware). Pour WS2812, 0.01–0.02 est souvent suffisant pour les effets rapides.
+Recommandations par type d'effet
+
+rainbow_cycle / chase : 0.01–0.05 pour fluide.
+scanner (Cylon) : 0.02–0.08 selon vitesse souhaitée.
+pulse / twinkle : 0.05–0.2 (effets plus doux).
+all_white (éclairage) : utiliser un delay > 0.1 ou même 1.0 (rafraîchissement peu fréquent), ou iterations=None pour rester fixe.
+
+'''
