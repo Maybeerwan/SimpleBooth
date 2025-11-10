@@ -16,6 +16,7 @@ import sys
 import queue
 import json
 import shutil
+import shlex
 from flask import stream_with_context
 from datetime import datetime
 from runware import Runware, IImageInference
@@ -662,6 +663,73 @@ def reprint_photo(filename):
         flash(f'Erreur lors de la réimpression: {str(e)}', 'error')
     
     return redirect(url_for('admin'))
+
+
+# --- Update depuis GitHub (admin) ---
+def _git_update_from_github(branch: str | None = None, repo_dir: str | None = None) -> str:
+    repo_dir = repo_dir or os.path.dirname(os.path.abspath(__file__))
+    # déterminer la branche courante si non fournie
+    if branch is None:
+        p = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=repo_dir, capture_output=True, text=True)
+        branch = p.stdout.strip() or 'master'
+    outputs = []
+    cmds = [
+        ['git', 'fetch', '--all', '--prune'],
+        ['git', 'checkout', branch],
+        ['git', 'reset', '--hard', f'origin/{branch}'],
+        ['git', 'clean', '-fdx'],
+        ['git', 'submodule', 'update', '--init', '--recursive']
+    ]
+    for cmd in cmds:
+        try:
+            logger.info(f"[GIT] Running: {' '.join(shlex.quote(c) for c in cmd)}")
+            proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=120)
+            outputs.append(f"$ {' '.join(cmd)}\nEXIT={proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}\n")
+            if proc.returncode != 0:
+                # arrêter si une commande critique échoue
+                break
+        except Exception as e:
+            outputs.append(f"Exception running {' '.join(cmd)}: {e}\n")
+            break
+    return "\n".join(outputs)
+
+def _delayed_restart(delay: float = 1.0):
+    """Redémarre le processus Python après un délai (utiliser avec prudence)."""
+    time.sleep(delay)
+    logger.info("[GIT] Redémarrage du process demandé, execv...")
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        logger.exception(f"[GIT] Impossible de redémarrer le process: {e}")
+
+@app.route('/admin/update_from_github', methods=['POST'])
+def admin_update_from_github():
+    """
+    Endpoint sécurisé pour mettre à jour le code depuis GitHub.
+    - En-tête attendu: X-GITHUB-TOKEN (si GITHUB_UPDATE_TOKEN est défini)
+    - form fields: branch (optionnel), restart (1 pour redémarrer après update)
+    """
+    # Vérifier token si configuré
+    configured_token = os.environ.get('GITHUB_UPDATE_TOKEN')
+    provided_token = request.headers.get('X-GITHUB-TOKEN') or request.form.get('token')
+    if configured_token:
+        if not provided_token or provided_token != configured_token:
+            return jsonify({'ok': False, 'error': 'Token invalide'}), 403
+
+    branch = request.form.get('branch') or None
+    restart = request.form.get('restart') == '1' or request.args.get('restart') == '1'
+
+    try:
+        out = _git_update_from_github(branch=branch)
+    except Exception as e:
+        logger.exception("[GIT] Erreur update_from_github")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # relancer si demandé
+    if restart:
+        threading.Thread(target=_delayed_restart, args=(1.0,), daemon=True).start()
+
+    return jsonify({'ok': True, 'output': out, 'restart_scheduled': bool(restart)})
 
 @app.route('/api/slideshow')
 def get_slideshow_data():

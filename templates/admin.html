@@ -31,6 +31,12 @@
                 <i class="fas fa-arrow-left me-2"></i>
                 Retour au Photobooth
             </a>
+
+            <!-- Bouton mise à jour GitHub -->
+            <button id="ghUpdateBtn" class="btn btn-outline-secondary ms-2">
+                <i class="fab fa-github me-2"></i>
+                Mettre à jour depuis GitHub
+            </button>
         </div>
         
         <!-- Configuration Photobooth -->
@@ -1145,5 +1151,48 @@ function updatePrinterStatus(data) {
         </div>
     `;
 }
+
+// Gestion du bouton de mise à jour GitHub
+document.addEventListener('DOMContentLoaded', function() {
+    const ghBtn = document.getElementById('ghUpdateBtn');
+    if (ghBtn) {
+        ghBtn.addEventListener('click', async function() {
+            if (!confirm('Confirmer la mise à jour depuis GitHub ? Cette opération remplacera les fichiers locaux.')) return;
+            // demander token si nécessaire
+            const token = prompt('Token GITHUB_UPDATE_TOKEN (laisser vide si non configuré)') || '';
+            // demander si redémarrer après update
+            const doRestart = confirm('Redémarrer automatiquement l\'application après mise à jour ?');
+            const form = new FormData();
+            if (doRestart) form.append('restart', '1');
+            ghBtn.disabled = true;
+            ghBtn.textContent = 'Mise à jour en cours...';
+            try {
+                const res = await fetch('/admin/update_from_github', {
+                    method: 'POST',
+                    headers: token ? { 'X-GITHUB-TOKEN': token } : undefined,
+                    body: form
+                });
+                const data = await res.json().catch(() => ({ ok: false, error: 'Réponse invalide' }));
+                if (data.ok) {
+                    alert('Mise à jour terminée.\n\nConsole output:\n' + (data.output || '').slice(0, 4000));
+                    if (data.restart_scheduled) {
+                        alert('Redémarrage lancé. La page va se recharger.');
+                        location.reload();
+                    } else {
+                        // recharger pour prendre en compte les changements de templates/js
+                        location.reload();
+                    }
+                } else {
+                    alert('Erreur mise à jour: ' + (data.error || 'inconnue'));
+                }
+            } catch (e) {
+                alert('Erreur réseau: ' + e);
+            } finally {
+                ghBtn.disabled = false;
+                ghBtn.innerHTML = '<i class="fab fa-github me-2"></i>Mettre à jour depuis GitHub';
+            }
+        });
+    }
+});
 </script>
 {% endblock %}
