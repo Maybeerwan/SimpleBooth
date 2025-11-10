@@ -673,12 +673,17 @@ def _git_update_from_github(branch: str | None = None, repo_dir: str | None = No
         p = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=repo_dir, capture_output=True, text=True)
         branch = p.stdout.strip() or 'master'
     outputs = []
+    '''
     cmds = [
         ['git', 'fetch', '--all', '--prune'],
         ['git', 'checkout', branch],
         ['git', 'reset', '--hard', f'origin/{branch}'],
         ['git', 'clean', '-fdx'],
         ['git', 'submodule', 'update', '--init', '--recursive']
+    ]
+    '''
+    cmds = [
+        ['git', 'pull']
     ]
     for cmd in cmds:
         try:
