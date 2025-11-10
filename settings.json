@@ -6,8 +6,8 @@
     "led_brightness": 255,
     "led_invert": false,
     "LED_CHANNEL": 0,
-    "photos_folder": "photos_new",
-    "effect_folder": "effet_new",
+    "photos_folder": "photos",
+    "effect_folder": "effet",
     "config_file": "config.json", 
     "button_start_capture": 115,
     "button_action_debounce": 0.5
