@@ -2,6 +2,9 @@ import os
 import sys
 import logging
 
+
+logger = logging.getLogger(__name__)
+
 # Si tu veux forcer le mock dans l'env de dev : export LED_FORCE_MOCK=1
 try:
     if os.environ.get('LED_FORCE_MOCK') == '1':
@@ -135,6 +138,7 @@ def release_strip():
     """
 
     global _strip_singleton, _strip_created_here
+    logger.info("[LED] Exteinction du ruban LED")
     stop_led_animation_mode()
     with _strip_lock:
         if _strip_singleton is None:

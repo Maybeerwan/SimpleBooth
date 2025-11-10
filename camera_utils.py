@@ -265,7 +265,7 @@ class MyPicammera:
         except Exception as e:
             self.picam2 = None
             self.error = f"Picamera2 unavailable: {e}"
-            logger.info(f"[PICAM] Erreur d'initialisation Picamera2: {e}")
+            logger.error(f"[PICAM] Erreur d'initialisation Picamera2: {e}")
 
         self.enable_qr_detection(qr_enabled)
 

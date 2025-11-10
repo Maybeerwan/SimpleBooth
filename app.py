@@ -944,7 +944,7 @@ def stop_camera_process():
             my_camera.stop()
         except Exception as e:
             logger.info(f"[CAMERA] Erreur lors de l'arrêt de la caméra USB: {e}")
-        my_camera = None
+        # my_camera = None
     
     # Arrêter le processus libcamera-vid si actif
     if camera_process:
