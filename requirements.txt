@@ -61,3 +61,4 @@ humanfriendly==10.0
 rpi-ws281x==5.0.0
 
 keyboard
+pyzbar

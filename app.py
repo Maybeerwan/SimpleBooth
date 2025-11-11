@@ -1087,7 +1087,10 @@ def _action_listener_worker():
         return
 
     start_capture_code = SETTINGS.get('button_start_capture', 115) 
-    debounce = SETTINGS.get('button_action_debounce', '0.5')
+    try:
+        debounce = float(SETTINGS.get('button_action_debounce', '0.5'))
+    except ValueError:
+        debounce = 0.5  # valeur par défaut
 
     logger.info(f"[ACTION] Listener clavier démarré (scan_code={start_capture_code})")
     last_time = 0.0

@@ -13,4 +13,5 @@
     "button_action_debounce": 0.5,
     "detect_downscale_width" :  640,
     "detect_every_n_frames" : 5,
+    "qr_library": "pyzbar"
 }

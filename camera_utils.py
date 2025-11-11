@@ -3,7 +3,11 @@ import threading
 import time
 import logging
 import numpy as np
+from PIL import Image
 from typing import Optional, Tuple
+from pyzbar.pyzbar import decode
+
+from config_utils import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +312,10 @@ class MyPicammera:
             logger.error(f"[PICAM] Erreur lors du démarrage Picamera2: {e}")
             return False
 
+    def _numpy_to_pil(self, img_array):
+        # picamera2 donne normalement image en RGB
+        return Image.fromarray(img_array)
+
     def _capture_loop(self):
         period = 1.0 / max(1, self.framerate)
         consecutive_errors = 0
@@ -335,42 +343,7 @@ class MyPicammera:
                 if self.qr_enabled and self.qr_detector is not None:
                     self._frame_count += 1
                     if (self._frame_count % self.detect_every_n_frames) == 0:
-                        try:
-                            h, w = arr.shape[:2]
-                            scale = 1.0
-                            if w > self.detect_downscale_width:
-                                scale = float(self.detect_downscale_width) / float(w)
-                                new_w = int(w * scale)
-                                new_h = int(h * scale)
-                                small = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-                                small_w = new_w
-                            else:
-                                small = bgr
-                                small_w = w
-                            # detectAndDecode accepte BGR ou gray
-                            data, points, _ = self.qr_detector.detectAndDecode(small)
-                            if data:
-                                now = time.time()
-                                # éviter répétitions trop fréquentes
-                                if data != self._last_qr or (now - self._last_qr_ts) > self.qr_debounce_seconds:
-                                    self._last_qr = data
-                                    self._last_qr_ts = now
-                                    logger.info(f"[PICAM][QR] QR détecté: {data}")
-                                    if callable(self.qr_callback):
-                                        # Remapper les points vers la taille originale si nécessaire
-                                        pts_copy = None
-                                        if points is not None:
-                                            try:
-                                                pts_arr = points.reshape(-1, 2)
-                                                # remap : coord_orig = coord_small * (orig_width / small_width)
-                                                inv_scale = float(w) / float(small_w) if small_w != 0 else 1.0
-                                                orig_corners = [(int(x * inv_scale), int(y * inv_scale)) for x, y in pts_arr]
-                                                pts_copy = orig_corners
-                                            except Exception:
-                                                pts_copy = None
-                                        threading.Thread(target=self.qr_callback, args=(data, pts_copy), daemon=True).start()
-                        except Exception as e:
-                            logger.info(f"[PICAM][QR] Erreur détection QR: {e}")
+                        self.dectect_qr_code(bgr)
 
                 # encoder en JPEG
                 try:
@@ -405,6 +378,66 @@ class MyPicammera:
                 logger.info("[PICAM] Picamera2 arrêtée")
         except Exception as e:
             logger.info(f"[PICAM] Erreur lors de l'arrêt Picamera2: {e}")
+
+
+    def dectect_qr_code(self, bgr) :
+        """Détecter un code QR dans une image numpy (BGR). Retourne (data, points) ou None."""
+        lib_decode = SETTINGS.get('qr_library', 'opencv')
+        if lib_decode == 'pyzbar':
+            try:
+                pil_img = self._numpy_to_pil(bgr)
+                decoded_objs = decode(pil_img)
+                for obj in decoded_objs:
+                    data = obj.data.decode('utf-8')
+                    now = time.time()
+                    # éviter répétitions trop fréquentes
+                    if data != self._last_qr or (now - self._last_qr_ts) > self.qr_debounce_seconds:
+                        self._last_qr = data
+                        self._last_qr_ts = now
+                        logger.info(f"[PICAM][QR] QR détecté avec pyzbar : {data}")
+                        if callable(self.qr_callback):
+                            points = [(point.x, point.y) for point in obj.polygon]
+                            threading.Thread(target=self.qr_callback, args=(data, points), daemon=True).start()
+            except Exception as e:
+                logger.info(f"[PICAM][QR] Erreur détection QR avec pyzbar: {e}")
+            return
+        else: 
+            try:
+                h, w = bgr.shape[:2]
+                scale = 1.0
+                if w > self.detect_downscale_width:
+                    scale = float(self.detect_downscale_width) / float(w)
+                    new_w = int(w * scale)
+                    new_h = int(h * scale)
+                    small = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    small_w = new_w
+                else:
+                    small = bgr
+                    small_w = w
+                # detectAndDecode accepte BGR ou gray
+                data, points, _ = self.qr_detector.detectAndDecode(small)
+                if data:
+                    now = time.time()
+                    # éviter répétitions trop fréquentes
+                    if data != self._last_qr or (now - self._last_qr_ts) > self.qr_debounce_seconds:
+                        self._last_qr = data
+                        self._last_qr_ts = now
+                        logger.info(f"[PICAM][QR] QR détecté: {data}")
+                        if callable(self.qr_callback):
+                            # Remapper les points vers la taille originale si nécessaire
+                            pts_copy = None
+                            if points is not None:
+                                try:
+                                    pts_arr = points.reshape(-1, 2)
+                                    # remap : coord_orig = coord_small * (orig_width / small_width)
+                                    inv_scale = float(w) / float(small_w) if small_w != 0 else 1.0
+                                    orig_corners = [(int(x * inv_scale), int(y * inv_scale)) for x, y in pts_arr]
+                                    pts_copy = orig_corners
+                                except Exception:
+                                    pts_copy = None
+                            threading.Thread(target=self.qr_callback, args=(data, pts_copy), daemon=True).start()
+            except Exception as e:
+                logger.info(f"[PICAM][QR] Erreur détection QR: {e}")
 
 
 class MockCamera:
