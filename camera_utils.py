@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 from typing import Optional, Tuple
 from pyzbar.pyzbar import decode
+from pyzxing import BarCodeReader
 
 from config_utils import SETTINGS
 
@@ -259,6 +260,7 @@ class MyPicammera:
         self._last_qr = None
         self._last_qr_ts = 0.0
         self.qr_detector = None
+        self._decoder = BarCodeReader()
 
         try:
             from picamera2 import Picamera2
@@ -401,6 +403,24 @@ class MyPicammera:
                             threading.Thread(target=self.qr_callback, args=(data, points), daemon=True).start()
             except Exception as e:
                 logger.info(f"[PICAM][QR] Erreur détection QR avec pyzbar: {e}")
+            return
+        elif lib_decode == 'pyzxing':
+            try:
+                pil_img = self._numpy_to_pil(bgr)
+                results = self._decoder.decode_array(np.array(pil_img))
+                for result in results:
+                    data = result.raw
+                    now = time.time()
+                    # éviter répétitions trop fréquentes
+                    if data != self._last_qr or (now - self._last_qr_ts) > self.qr_debounce_seconds:
+                        self._last_qr = data
+                        self._last_qr_ts = now
+                        logger.info(f"[PICAM][QR] QR détecté avec pyzxing : {data}")
+                        if callable(self.qr_callback):
+                            points = result.position
+                            threading.Thread(target=self.qr_callback, args=(data, points), daemon=True).start()
+            except Exception as e:
+                logger.info(f"[PICAM][QR] Erreur détection QR avec pyzxing: {e}")
             return
         else: 
             try:
