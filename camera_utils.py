@@ -7,6 +7,8 @@ from PIL import Image
 from typing import Optional, Tuple
 from pyzbar.pyzbar import decode
 from pyzxing import BarCodeReader
+import tempfile
+import os
 
 from config_utils import SETTINGS
 
@@ -406,8 +408,12 @@ class MyPicammera:
             return
         elif lib_decode == 'pyzxing':
             try:
-                pil_img = self._numpy_to_pil(bgr)
-                results = self._decoder.decode_array(np.array(pil_img))
+                # pil_img = self._numpy_to_pil(bgr)
+                # results = self._decoder.decode_array(np.array(pil_img))
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    cv2.imwrite(tmp.name, bgr)
+                    results = self._decoder.decode(tmp.name)
+                os.remove(tmp.name)
                 for result in results:
                     logger.info(f"[PICAM][QR] QR retour de pyzxing : {result}")
                     data = result.raw
