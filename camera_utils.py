@@ -409,6 +409,7 @@ class MyPicammera:
                 pil_img = self._numpy_to_pil(bgr)
                 results = self._decoder.decode_array(np.array(pil_img))
                 for result in results:
+                    logger.info(f"[PICAM][QR] QR retour de pyzxing : {result}")
                     data = result.raw
                     now = time.time()
                     # éviter répétitions trop fréquentes

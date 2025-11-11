@@ -12,6 +12,6 @@
     "button_start_capture": 115,
     "button_action_debounce": 0.5,
     "detect_downscale_width" :  640,
-    "detect_every_n_frames" : 5,
+    "detect_every_n_frames" : 25,
     "qr_library": "pyzxing"
 }
