@@ -90,7 +90,7 @@ class UsbCamera:
         self.lock = threading.Lock()
         self.error = None
 
-    def get_nom():
+    def get_nom(self):
         return "USB Camera"
     
     def start(self):
@@ -272,7 +272,7 @@ class MyPicammera:
 
         self.enable_qr_detection(qr_enabled)
 
-    def get_nom():
+    def get_nom(self):
         return "Picamera2"
 
     def enable_qr_detection(self, enabled: bool):
@@ -438,7 +438,7 @@ class MockCamera:
                                    if f.lower().endswith(exts)])
         self._last_time = time.time()
     
-    def get_nom():
+    def get_nom(self):
         return "Mock Camera"
 
     def start(self):
