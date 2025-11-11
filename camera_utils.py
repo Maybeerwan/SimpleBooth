@@ -90,6 +90,9 @@ class UsbCamera:
         self.lock = threading.Lock()
         self.error = None
 
+    def get_nom():
+        return "USB Camera"
+    
     def start(self):
         if self.is_running:
             return True
@@ -269,12 +272,15 @@ class MyPicammera:
 
         self.enable_qr_detection(qr_enabled)
 
+    def get_nom():
+        return "Picamera2"
 
     def enable_qr_detection(self, enabled: bool):
         ''' Activer/désactiver la détection QR '''
         self.qr_enabled = enabled
         if self.qr_enabled and self.qr_detector is None:
             try:
+                logger.info(f"[PICAM][QR] Activation détection QR")
                 self.qr_detector = cv2.QRCodeDetector()
             except Exception as e:
                 logger.info(f"[PICAM][QR] Impossible d'initialiser QR detector: {e}")
@@ -336,10 +342,10 @@ class MyPicammera:
                                 scale = float(self.detect_downscale_width) / float(w)
                                 new_w = int(w * scale)
                                 new_h = int(h * scale)
-                                small = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                                small = cv2.resize(bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
                                 small_w = new_w
                             else:
-                                small = arr
+                                small = bgr
                                 small_w = w
                             # detectAndDecode accepte BGR ou gray
                             data, points, _ = self.qr_detector.detectAndDecode(small)
@@ -395,6 +401,7 @@ class MyPicammera:
         try:
             if self.picam2 is not None:
                 self.picam2.stop()
+                
                 logger.info("[PICAM] Picamera2 arrêtée")
         except Exception as e:
             logger.info(f"[PICAM] Erreur lors de l'arrêt Picamera2: {e}")
@@ -431,6 +438,9 @@ class MockCamera:
                                    if f.lower().endswith(exts)])
         self._last_time = time.time()
     
+    def get_nom():
+        return "Mock Camera"
+
     def start(self):
         return True
     

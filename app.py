@@ -838,8 +838,11 @@ def generate_video_stream():
                 else:
                     time.sleep(0.03)  # Attendre si pas de frame disponible
         elif camera_type == 'picamera':
-            logger.info("[CAMERA] Démarrage de la Pi Camera python...")
-            my_camera = MyPicammera(qr_enabled=True, qr_callback=on_qr_detected, detect_every_n_frames=5, detect_downscale_width=640)
+            if not my_camera or my_camera.get_nom() != "Picamera2":
+                logger.info("[CAMERA] Démarrage de la Pi Camera python...")
+                detect_downscale_width = SETTINGS.get('detect_downscale_width', '640')
+                detect_every_n_frames = SETTINGS.get('detect_every_n_frames', '5')      
+                my_camera = MyPicammera(qr_enabled=True, qr_callback=on_qr_detected, detect_every_n_frames=detect_every_n_frames, detect_downscale_width=detect_downscale_width)
             if not my_camera.start():
                 raise Exception("Impossible de démarrer la Pi Camera python")  
             # Générateur de frames pour la Pi Camera
