@@ -383,7 +383,7 @@ class MyPicammera:
     def dectect_qr_code(self, bgr) :
         """Détecter un code QR dans une image numpy (BGR). Retourne (data, points) ou None."""
         lib_decode = SETTINGS.get('qr_library', 'opencv')
-        logger.debug(f"[PICAM][QR] détection de QR code avec {lib_decode}.")
+        logger.info(f"[PICAM][QR] détection de QR code avec {lib_decode}.")
         if lib_decode == 'pyzbar':
             try:
                 pil_img = self._numpy_to_pil(bgr)
